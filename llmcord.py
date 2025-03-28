@@ -21,7 +21,6 @@ PROVIDERS_SUPPORTING_USERNAMES = ("openai", "x-ai")
 EMBED_COLOR_COMPLETE = discord.Color.dark_green()
 EMBED_COLOR_INCOMPLETE = discord.Color.orange()
 
-STREAMING_INDICATOR = " ⚪"
 EDIT_DELAY_SECONDS = 1
 
 MAX_MESSAGE_NODES = 100
@@ -33,6 +32,8 @@ def get_config(filename="config.yaml"):
 
 
 cfg = get_config()
+
+STREAMING_INDICATOR = " " + cfg["streaming_indicator"]
 
 if client_id := cfg["client_id"]:
 	logging.info(f"\n\nBOT INVITE URL:\nhttps://discord.com/api/oauth2/authorize?client_id={client_id}&permissions=412317273088&scope=bot\n")
