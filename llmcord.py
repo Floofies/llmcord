@@ -18,7 +18,6 @@ logging.basicConfig(
 VISION_MODEL_TAGS = ("gpt-4", "claude-3", "gemini", "gemma", "pixtral", "mistral-small", "llava", "vision", "vl")
 PROVIDERS_SUPPORTING_USERNAMES = ("openai", "x-ai")
 
-EMBED_COLOR_COMPLETE = discord.Color.dark_green()
 EMBED_COLOR_INCOMPLETE = discord.Color.orange()
 
 EDIT_DELAY_SECONDS = 1
@@ -33,7 +32,8 @@ def get_config(filename="config.yaml"):
 
 cfg = get_config()
 
-STREAMING_INDICATOR = " " + cfg["streaming_indicator"]
+embed_color_complete = cfg["embed_color"] or discord.Color.dark_green()
+streaming_indicator = " " + cfg["streaming_indicator"]
 
 if client_id := cfg["client_id"]:
 	logging.info(f"\n\nBOT INVITE URL:\nhttps://discord.com/api/oauth2/authorize?client_id={client_id}&permissions=412317273088&scope=bot\n")
@@ -79,6 +79,9 @@ async def on_message(new_msg):
 
 	cfg = get_config()
 
+	embed_color_complete = cfg["embed_color"] or discord.Color.dark_green()
+	streaming_indicator = " " + cfg["streaming_indicator"]
+
 	allow_dms = cfg["allow_dms"]
 	permissions = cfg["permissions"]
 
@@ -110,7 +113,7 @@ async def on_message(new_msg):
 	max_messages = cfg["max_messages"]
 
 	use_plain_responses = cfg["use_plain_responses"]
-	max_message_length = 2000 if use_plain_responses else (4096 - len(STREAMING_INDICATOR))
+	max_message_length = 2000 if use_plain_responses else (4096 - len(streaming_indicator))
 
 	# Build message chain and set user warnings
 	messages = []
@@ -243,8 +246,8 @@ async def on_message(new_msg):
 						if edit_task != None:
 							await edit_task
 
-						embed.description = response_contents[-1] if is_final_edit else (response_contents[-1] + STREAMING_INDICATOR)
-						embed.color = EMBED_COLOR_COMPLETE if msg_split_incoming or is_good_finish else EMBED_COLOR_INCOMPLETE
+						embed.description = response_contents[-1] if is_final_edit else (response_contents[-1] + streaming_indicator)
+						embed.color = embed_color_complete if msg_split_incoming or is_good_finish else EMBED_COLOR_INCOMPLETE
 
 						if start_next_msg:
 							reply_to_msg = new_msg if response_msgs == [] else response_msgs[-1]
