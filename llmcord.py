@@ -32,7 +32,7 @@ def get_config(filename="config.yaml"):
 
 cfg = get_config()
 
-embed_color_complete = cfg["embed_color"] or discord.Color.dark_green()
+embed_color_complete = discord.Color.from_str(cfg["embed_color"]) or discord.Color.dark_green()
 streaming_indicator = " " + cfg["streaming_indicator"]
 
 if client_id := cfg["client_id"]:
@@ -79,7 +79,7 @@ async def on_message(new_msg):
 
 	cfg = get_config()
 
-	embed_color_complete = cfg["embed_color"] or discord.Color.dark_green()
+	embed_color_complete = discord.Color.from_str(cfg["embed_color"]) or discord.Color.dark_green()
 	streaming_indicator = " " + cfg["streaming_indicator"]
 
 	allow_dms = cfg["allow_dms"]
