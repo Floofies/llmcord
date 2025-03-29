@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from base64 import b64encode
 from dataclasses import dataclass, field
 from datetime import datetime as dt
@@ -20,8 +21,6 @@ PROVIDERS_SUPPORTING_USERNAMES = ("openai", "x-ai")
 
 EMBED_COLOR_INCOMPLETE = discord.Color.orange()
 
-EDIT_DELAY_SECONDS = 1
-
 MAX_MESSAGE_NODES = 100
 
 
@@ -29,6 +28,17 @@ def get_config(filename="config.yaml"):
 	with open(filename, "r") as file:
 		return yaml.safe_load(file)
 
+# Get last response ID for persistent context #FIXME: OpenAI API forgets it after a reboot.
+def get_last_id():
+	with open("last_id.txt", "r") as file:
+		file_content = file.read()
+		if not file_content:
+			return None
+		return file_content
+
+def set_last_id(request_id_string=""):
+	with open("last_id.txt", "w") as file:
+		return file.write(request_id_string)
 
 cfg = get_config()
 
@@ -48,6 +58,11 @@ httpx_client = httpx.AsyncClient()
 msg_nodes = {}
 last_task_time = 0
 
+#FIXME: OpenAI API forgets it after a reboot: "Previous response with id 'resp_67e71a8f9fc081929e727652edb6699a01f313ab22f9312d' not found."
+# Load response ID from last session to preserve context
+#last_response_id = get_last_id()
+
+last_response_id = None
 
 @dataclass
 class MsgNode:
@@ -67,7 +82,7 @@ class MsgNode:
 
 @discord_client.event
 async def on_message(new_msg):
-	global msg_nodes, last_task_time
+	global msg_nodes, last_task_time, last_response_id
 
 	is_dm = new_msg.channel.type == discord.ChannelType.private
 
@@ -179,9 +194,6 @@ async def on_message(new_msg):
 
 			if content != "":
 				message = dict(content=content, role=curr_node.role)
-				if accept_usernames and curr_node.user_id != None:
-					message["name"] = str(curr_node.user_id)
-
 				messages.append(message)
 
 			if len(curr_node.text) > max_text:
@@ -206,27 +218,59 @@ async def on_message(new_msg):
 		messages.append(dict(role="system", content=full_system_prompt))
 
 	# Generate and send response message(s) (can be multiple if response is long)
-	curr_content = finish_reason = edit_task = None
+	curr_content = None
+	edit_task = None
+	finish_reason = None
+	user_id = None
 	response_msgs = []
 	response_contents = []
+	
+	if accept_usernames and new_msg.author.id != None:
+		user_id = str(new_msg.author.id)
 
 	embed = discord.Embed()
 	for warning in sorted(user_warnings):
 		embed.add_field(name=warning, value="", inline=False)
 
-	kwargs = dict(model=model, messages=messages[::-1], stream=True, extra_body=cfg["extra_api_parameters"])
+	#kwargs = dict(model=model, messages=messages[::-1], stream=True, extra_body=cfg["extra_api_parameters"])
+	kwargs = dict(
+		model=model,
+		input=messages[::-1],
+		user=user_id,
+		max_output_tokens=cfg["max_output_tokens"],
+		previous_response_id=last_response_id,
+		truncation="auto",
+		stream=True
+	)
 	try:
 		async with new_msg.channel.typing():
-			async for curr_chunk in await openai_client.chat.completions.create(**kwargs):
+			async for curr_chunk in await openai_client.responses.create(**kwargs):
+				logging.info("Response: %s", vars(curr_chunk))
+
+				if curr_chunk.type not in ("response.incomplete", "response.output_text.delta", "response.completed"):
+					continue
+
+				if curr_chunk.type == "response.incomplete":
+					if curr_chunk.response.incomplete_details != None:
+						finish_reason = curr_chunk.response.incomplete_details.reason
+
 				if finish_reason != None:
 					break
 
-				finish_reason = curr_chunk.choices[0].finish_reason
+				if curr_chunk.type == "response.completed":
+					last_response_id = curr_chunk.response.id
+					# Keep last response ID saved between sessions
+					set_last_id(last_response_id)
 
-				prev_content = curr_content or ""
-				curr_content = curr_chunk.choices[0].delta.content or ""
+					if finish_reason == None:
+						finish_reason = "stop"
 
-				new_content = prev_content if finish_reason == None else (prev_content + curr_content)
+				prev_content = ""
+				if curr_chunk.type == "response.output_text.delta":
+					prev_content = curr_content or ""
+					curr_content = curr_chunk.delta or ""
+
+				new_content = prev_content if finish_reason != "stop" else (prev_content + curr_content)
 
 				if response_contents == [] and new_content == "":
 					continue
@@ -237,7 +281,7 @@ async def on_message(new_msg):
 				response_contents[-1] += new_content
 
 				if not use_plain_responses:
-					ready_to_edit = (edit_task == None or edit_task.done()) and dt.now().timestamp() - last_task_time >= EDIT_DELAY_SECONDS
+					ready_to_edit = (edit_task == None or edit_task.done()) and dt.now().timestamp() - last_task_time >= cfg["edit_delay_seconds"]
 					msg_split_incoming = finish_reason == None and len(response_contents[-1] + curr_content) > max_message_length
 					is_final_edit = finish_reason != None or msg_split_incoming
 					is_good_finish = finish_reason != None and finish_reason.lower() in ("stop", "end_turn")
