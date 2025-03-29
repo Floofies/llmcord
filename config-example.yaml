@@ -57,6 +57,7 @@ providers:
 
 model: openai/gpt-4o
 max_output_tokens: 2048
+reasoning_effort: medium
 
 extra_api_parameters:
   max_tokens: 4096

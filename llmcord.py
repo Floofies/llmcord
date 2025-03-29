@@ -215,7 +215,7 @@ async def on_message(new_msg):
 			system_prompt_extras.append("User's names are their Discord IDs and should be typed as '<@ID>'.")
 
 		full_system_prompt = "\n".join([system_prompt] + system_prompt_extras)
-		messages.append(dict(role="system", content=full_system_prompt))
+		messages.append(dict(role="developer", content=full_system_prompt))
 
 	# Generate and send response message(s) (can be multiple if response is long)
 	curr_content = None
@@ -238,6 +238,7 @@ async def on_message(new_msg):
 		input=messages[::-1],
 		user=user_id,
 		max_output_tokens=cfg["max_output_tokens"],
+		reasoning={"effort": cfg["reasoning_effort"]},
 		previous_response_id=last_response_id,
 		truncation="auto",
 		stream=True
