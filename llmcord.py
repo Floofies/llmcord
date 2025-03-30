@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 from base64 import b64encode
 from dataclasses import dataclass, field
 from datetime import datetime as dt
@@ -11,22 +10,31 @@ import httpx
 from openai import AsyncOpenAI
 import yaml
 
-logging.basicConfig(
-	level=logging.INFO,
-	format="%(asctime)s %(levelname)s: %(message)s",
-)
-
 VISION_MODEL_TAGS = ("gpt-4", "claude-3", "gemini", "gemma", "pixtral", "mistral-small", "llava", "vision", "vl")
 PROVIDERS_SUPPORTING_USERNAMES = ("openai", "x-ai")
-
 EMBED_COLOR_INCOMPLETE = discord.Color.orange()
-
 MAX_MESSAGE_NODES = 100
 
-
+#TODO: Relocate config code to a module
 def get_config(filename="config.yaml"):
 	with open(filename, "r") as file:
 		return yaml.safe_load(file)
+
+def set_log_level(cfg_level="debug"):
+	new_level = logging.DEBUG
+	match cfg_level:
+		case "info":
+			new_level = logging.INFO
+		case "warning":
+			new_level = logging.WARNING
+		case "error":
+			new_level = logging.ERROR
+		case "critical":
+			new_level = logging.CRITICAL
+	if cfg_level == "none":
+		logging.disable(logging.INFO)
+	else:
+		logging.setLevel(new_level)
 
 # Get last response ID for persistent context #FIXME: OpenAI API forgets it after a reboot.
 def get_last_id():
@@ -40,7 +48,14 @@ def set_last_id(request_id_string=""):
 	with open("last_id.txt", "w") as file:
 		return file.write(request_id_string)
 
+#TODO: Relocate config code to a module
 cfg = get_config()
+
+cfg_log_level = cfg["log_level"]
+logging.basicConfig(
+	format="%(asctime)s %(levelname)s: %(message)s",
+)
+set_log_level(cfg_log_level)
 
 embed_color_complete = discord.Color.from_str(cfg["embed_color"]) or discord.Color.dark_green()
 streaming_indicator = " " + cfg["streaming_indicator"]
@@ -82,7 +97,7 @@ class MsgNode:
 
 @discord_client.event
 async def on_message(new_msg):
-	global msg_nodes, last_task_time, last_response_id
+	global cfg_log_level, msg_nodes, last_task_time, last_response_id
 
 	is_dm = new_msg.channel.type == discord.ChannelType.private
 
@@ -93,6 +108,10 @@ async def on_message(new_msg):
 	channel_ids = set(filter(None, (new_msg.channel.id, getattr(new_msg.channel, "parent_id", None), getattr(new_msg.channel, "category_id", None))))
 
 	cfg = get_config()
+
+	if cfg["log_level"] != cfg_log_level:
+		cfg_log_level = cfg["log_level"]
+		set_log_level(cfg_log_level)
 
 	embed_color_complete = discord.Color.from_str(cfg["embed_color"]) or discord.Color.dark_green()
 	streaming_indicator = " " + cfg["streaming_indicator"]
@@ -137,13 +156,10 @@ async def on_message(new_msg):
 
 	while curr_msg != None and len(messages) < max_messages:
 		curr_node = msg_nodes.setdefault(curr_msg.id, MsgNode())
-
 		async with curr_node.lock:
 			if curr_node.text == None:
 				cleaned_content = curr_msg.content.removeprefix(discord_client.user.mention).lstrip()
-
 				good_attachments = [att for att in curr_msg.attachments if att.content_type and any(att.content_type.startswith(type) for type in ("text", "image"))]
-
 				attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments])
 
 				curr_node.text = "\n".join(
@@ -151,17 +167,13 @@ async def on_message(new_msg):
 					+ ["\n".join(filter(None, (embed.title, embed.description, embed.footer.text))) for embed in curr_msg.embeds]
 					+ [resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text")]
 				)
-
 				curr_node.images = [
 					dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{b64encode(resp.content).decode('utf-8')}"))
 					for att, resp in zip(good_attachments, attachment_responses)
 					if att.content_type.startswith("image")
 				]
-
 				curr_node.role = "assistant" if curr_msg.author == discord_client.user else "user"
-
 				curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
-
 				curr_node.has_bad_attachments = len(curr_msg.attachments) > len(good_attachments)
 
 				try:
@@ -207,13 +219,17 @@ async def on_message(new_msg):
 
 			curr_msg = curr_node.parent_msg
 
-	logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, conversation length: {len(messages)}):\n{new_msg.content}")
+	log_msg = f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, conversation length: {len(messages)})"
+	if cfg_log_level == "debug":
+		log_msg += f":\n{new_msg.content}"
+	logging.info(log_msg)
 
-	if system_prompt := cfg["system_prompt"]:
+	system_prompt = cfg["system_prompt"]
+	if last_response_id == None:
+		#FIXME: Emit date when day changes
 		system_prompt_extras = [f"Today's date: {dt.now().strftime('%B %d %Y')}."]
 		if accept_usernames:
 			system_prompt_extras.append("User's names are their Discord IDs and should be typed as '<@ID>'.")
-
 		full_system_prompt = "\n".join([system_prompt] + system_prompt_extras)
 		messages.append(dict(role="developer", content=full_system_prompt))
 
@@ -224,7 +240,7 @@ async def on_message(new_msg):
 	user_id = None
 	response_msgs = []
 	response_contents = []
-	
+
 	if accept_usernames and new_msg.author.id != None:
 		user_id = str(new_msg.author.id)
 
@@ -232,7 +248,6 @@ async def on_message(new_msg):
 	for warning in sorted(user_warnings):
 		embed.add_field(name=warning, value="", inline=False)
 
-	#kwargs = dict(model=model, messages=messages[::-1], stream=True, extra_body=cfg["extra_api_parameters"])
 	kwargs = dict(
 		model=model,
 		input=messages[::-1],
@@ -246,7 +261,7 @@ async def on_message(new_msg):
 	try:
 		async with new_msg.channel.typing():
 			async for curr_chunk in await openai_client.responses.create(**kwargs):
-				logging.info("Response: %s", vars(curr_chunk))
+				logging.info(f"API response: %s", vars(curr_chunk))
 
 				if curr_chunk.type not in ("response.incomplete", "response.output_text.delta", "response.completed"):
 					continue
@@ -328,9 +343,7 @@ async def on_message(new_msg):
 			async with msg_nodes.setdefault(msg_id, MsgNode()).lock:
 				msg_nodes.pop(msg_id, None)
 
-
 async def main():
 	await discord_client.start(cfg["bot_token"])
-
 
 asyncio.run(main())

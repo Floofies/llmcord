@@ -1,16 +1,22 @@
+# Logging settings
+
+log_level: info
+
+
 # Discord settings:
 
 bot_token: 
 client_id: 
+
 status_message: 
 streaming_indicator: ⚪
 embed_color: "#5865F2"
-edit_delay_seconds: 0.5
 
 max_text: 100000
 max_images: 5
 max_messages: 25
 
+edit_delay_seconds: 0.5
 use_plain_responses: false
 allow_dms: true
 
